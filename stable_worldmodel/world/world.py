@@ -68,8 +68,8 @@ class World:
     """Drive a policy through a pool of preprocessed envs.
 
     After construction, ``world.envs`` is an ``EnvPool`` of ``num_envs``
-    environments, each wrapped by ``MegaWrapper`` (and any ``extra_wrappers``
-    you pass). Attach a policy with ``set_policy(...)`` and then call
+    environments, each wrapped by ``MegaWrapper`` (and any ``pre_wrappers`` /
+    ``extra_wrappers`` you pass). Attach a policy with ``set_policy(...)`` and then call
     ``collect()`` or ``evaluate()`` to run rollouts.
 
     Attributes populated during a run:
@@ -86,8 +86,13 @@ class World:
         max_episode_steps: Per-env step cap before truncation.
         goal_conditioned: If True, the goal key is kept separate from
             regular observations (controls ``MegaWrapper.separate_goal``).
-        extra_wrappers: Additional ``gym.Wrapper`` factories applied
-            after ``MegaWrapper``.
+        pre_wrappers: ``gym.Wrapper`` factories applied *before*
+            ``MegaWrapper`` (closer to the raw env). Use for env-level
+            modifiers (action repeat, reward shaping, obs injection) whose
+            output ``MegaWrapper`` should then standardize and validate.
+        extra_wrappers: ``gym.Wrapper`` factories applied *after*
+            ``MegaWrapper``. Use for transforms that consume the canonical
+            observation (frame stacking, normalization).
         image_transform: Optional callable applied to pixels inside
             ``MegaWrapper``.
         goal_transform: Optional callable applied to the goal inside
@@ -105,6 +110,7 @@ class World:
         image_shape: tuple[int, int],
         max_episode_steps: int = 100,
         goal_conditioned: bool = True,
+        pre_wrappers: list | None = None,
         extra_wrappers: list | None = None,
         image_transform: Callable | None = None,
         goal_transform: Callable | None = None,
@@ -112,6 +118,7 @@ class World:
         **kwargs: Any,
     ):
         wrappers = [
+            *(pre_wrappers or []),
             partial(
                 MegaWrapper,
                 image_shape=image_shape,
