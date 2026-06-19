@@ -263,6 +263,7 @@ class World:
         format: str = 'lance',
         writer: Any = None,
         progress: bool = True,
+        mode: str = 'append',
     ) -> None:
         """Roll out ``episodes`` and dump their trajectories.
 
@@ -301,7 +302,7 @@ class World:
             )
 
         if writer is None:
-            writer_cm = get_format(format).open_writer(path)
+            writer_cm = get_format(format).open_writer(path, mode=mode)
         else:
             writer_cm = writer
 
