@@ -1,0 +1,73 @@
+defaults:
+  - _self_
+  - launcher: local
+  - data: pusht
+
+output_model_name: cjepa
+subdir: ${hydra:job.id}
+
+num_workers: 6
+train_split: 0.9
+seed: 3072
+
+img_size: 224
+
+wm:
+  history_size: 3
+  future_size: 1
+  num_preds: ${wm.future_size}   # alias so pusht.yaml num_steps formula works
+  max_masked_slots: 2            # |M| ~ Uniform({0,...,max_masked_slots})
+
+trainer:
+  max_epochs: 30
+  devices: auto
+  accelerator: gpu
+  precision: bf16
+  gradient_clip_val: 1.0
+
+loader:
+  batch_size: 256
+  num_workers: ${num_workers}
+  drop_last: True
+  persistent_workers: True
+  prefetch_factor: 3
+  pin_memory: True
+  shuffle: True
+
+optimizer:
+  type: Adam
+  lr: 5e-4
+
+slot_dim: 128
+n_slots: 4   # PushT: 3 objects + background
+
+model:
+  _target_: stable_worldmodel.wm.cjepa.CJEPAWorldModel
+  n_slots: ${n_slots}
+  slot_dim: ${slot_dim}
+  history_len: ${wm.history_size}
+  future_len: ${wm.future_size}
+  max_masked_slots: ${wm.max_masked_slots}
+  slot_encoder:
+    # Placeholder: replaced with VideoSAUREncoder once checkpoint is available.
+    # See Phase 3 of CJEPA_PROJECT.md for VideoSAUR integration.
+    _target_: stable_worldmodel.wm.cjepa.cjepa.DummySlotEncoder
+    n_slots: ${n_slots}
+    slot_dim: ${slot_dim}
+  predictor:
+    _target_: stable_worldmodel.wm.cjepa.module.BidirectionalTransformer
+    dim: ${slot_dim}
+    depth: 6
+    heads: 16
+    dim_head: 64
+    mlp_dim: 2048
+  action_encoder:
+    _target_: stable_worldmodel.wm.lewm.module.Embedder
+    input_dim: ???  # set by training script from dataset action dim
+    smoothed_dim: ${slot_dim}
+    emb_dim: ${slot_dim}
+  proprio_encoder:
+    _target_: stable_worldmodel.wm.lewm.module.Embedder
+    input_dim: ???  # set by training script from dataset proprio dim
+    smoothed_dim: ${slot_dim}
+    emb_dim: ${slot_dim}
