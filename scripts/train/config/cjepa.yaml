@@ -10,7 +10,7 @@ num_workers: 6
 train_split: 0.9
 seed: 3072
 
-img_size: 224
+img_size: 196  # VideoSAUR-PushT's trained resolution (14x14=196 patches @ patch14); DummySlotEncoder doesn't care
 
 wm:
   history_size: 3
@@ -49,11 +49,19 @@ model:
   future_len: ${wm.future_size}
   max_masked_slots: ${wm.max_masked_slots}
   slot_encoder:
-    # Placeholder: replaced with VideoSAUREncoder once checkpoint is available.
-    # See Phase 3 of CJEPA_PROJECT.md for VideoSAUR integration.
-    _target_: stable_worldmodel.wm.cjepa.cjepa.DummySlotEncoder
+    # Frozen VideoSAUR encoder (Phase 3), loading the official PushT checkpoint
+    # (huggingface.co/HazelNam/CJEPA). Download it first:
+    #   python -c "from stable_worldmodel.wm.cjepa.download import download_videosaur_checkpoint as d; print(d())"
+    # For CPU-only smoke tests without the checkpoint, override on the CLI:
+    #   model.slot_encoder._target_=stable_worldmodel.wm.cjepa.cjepa.DummySlotEncoder
+    _target_: stable_worldmodel.wm.cjepa.VideoSAUREncoder
     n_slots: ${n_slots}
     slot_dim: ${slot_dim}
+    img_size: ${img_size}
+    checkpoint_path: null
+    # Note: data/pusht.yaml uses frameskip=5, but VideoSAUR-PushT was trained
+    # at frameskip=2 (chunk_size=6) — a minor train/inference domain-shift
+    # risk, not addressed in Phase 3; revisit if Phase 4/5 metrics look off.
   predictor:
     _target_: stable_worldmodel.wm.cjepa.module.BidirectionalTransformer
     dim: ${slot_dim}

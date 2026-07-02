@@ -122,6 +122,11 @@ class CJEPAWorldModel(nn.Module):
         Returns:
             slots: (B, T, N, D)
         """
+        if getattr(self.slot_encoder, 'requires_temporal_context', False):
+            # e.g. VideoSAUREncoder: Slot Attention is recurrent across time,
+            # so the encoder needs the full clip, not independent frames.
+            return self.slot_encoder(pixels)
+
         B, T = pixels.shape[:2]
         flat = rearrange(pixels, 'b t ... -> (b t) ...')
         slots = self.slot_encoder(flat)  # (B*T, N, D)
