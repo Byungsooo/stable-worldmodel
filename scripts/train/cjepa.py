@@ -43,6 +43,7 @@ class SaveCkptCallback(Callback):
             model,
             run_name=self.run_name,
             config=self.cfg,
+            config_key='model',
             filename=f'weights_epoch_{epoch}.pt',
         )
 
@@ -83,9 +84,10 @@ def run(cfg):
             cfg.data.dataset.frameskip * dataset.get_dim('action')
         )
         if cfg.model.get('proprio_encoder') is not None:
-            cfg.model.proprio_encoder.input_dim = (
-                cfg.data.dataset.frameskip * dataset.get_dim('proprio')
-            )
+            # Unlike 'action', the dataset doesn't stack 'proprio' across the
+            # frameskip window (see Dataset.__getitem__ in data/dataset.py) —
+            # it stays at its raw per-frame dimension.
+            cfg.model.proprio_encoder.input_dim = dataset.get_dim('proprio')
 
     transform = spt.data.transforms.Compose(*transforms)
     dataset.transform = transform

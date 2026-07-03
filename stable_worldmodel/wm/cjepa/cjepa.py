@@ -12,7 +12,18 @@ class DummySlotEncoder(nn.Module):
     Output: (B*T, N, D)
     """
 
-    def __init__(self, n_slots: int, slot_dim: int, img_channels: int = 3, img_size: int = 64):
+    def __init__(
+        self,
+        n_slots: int,
+        slot_dim: int,
+        img_channels: int = 3,
+        img_size: int = 64,
+        checkpoint_path=None,
+    ):
+        # checkpoint_path is accepted (and ignored) so this class is a drop-in
+        # swap for VideoSAUREncoder via the `model.slot_encoder._target_` CLI
+        # override documented in cjepa.yaml, without needing to also strip
+        # the sibling `checkpoint_path: null` key from the Hydra config.
         super().__init__()
         self.n_slots = n_slots
         self.slot_dim = slot_dim
@@ -148,8 +159,8 @@ class CJEPAWorldModel(nn.Module):
             act_emb = self.action_encoder(info['action'])  # (B, T, D)
             info['act_emb'] = act_emb.unsqueeze(2)  # (B, T, 1, D)
 
-        if 'state' in info and self.proprio_encoder is not None:
-            prop_emb = self.proprio_encoder(info['state'])  # (B, T, D)
+        if 'proprio' in info and self.proprio_encoder is not None:
+            prop_emb = self.proprio_encoder(info['proprio'])  # (B, T, D)
             info['prop_emb'] = prop_emb.unsqueeze(2)  # (B, T, 1, D)
 
         return info
@@ -193,9 +204,13 @@ class CJEPAWorldModel(nn.Module):
         tokens = slots_all.clone()  # (B, T, N, D), will be modified in-place
         is_slot_masked = torch.zeros(B, T, N, dtype=torch.bool, device=slots_all.device)
 
-        # Precompute temporal embeddings for all timesteps
+        # Precompute temporal embeddings for all timesteps. Cast to tokens'
+        # dtype: under mixed/low precision training, temporal_emb's output
+        # dtype isn't guaranteed to match slots_all's, and the boolean-mask
+        # assignment below (index_put) requires an exact dtype match, unlike
+        # plain indexed assignment which casts implicitly.
         t_indices = torch.arange(T, device=slots_all.device)
-        t_embs = self.temporal_emb(t_indices)  # (T, D)
+        t_embs = self.temporal_emb(t_indices).to(tokens.dtype)  # (T, D)
 
         for b in range(B):
             # Sample how many objects to mask this batch item
