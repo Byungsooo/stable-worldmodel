@@ -238,10 +238,25 @@ class CJEPAWorldModel(nn.Module):
             tokens[visible_mask] + t_embs.unsqueeze(1).expand(B, T, N, D)[visible_mask]
         )
 
-        # Concatenate auxiliary nodes (always visible, add temporal PE)
+        # Concatenate auxiliary nodes (always visible, add temporal PE).
+        # The future position(s) (tau >= T_h) must be conditioned on the
+        # action block that actually PRODUCED that frame from the last
+        # history frame (block T_h - 1), not the dataset's own block tau
+        # (which is the action taken AFTER the target frame, uncorrelated
+        # with how it was reached) — using block tau here was silently
+        # teaching the model to associate the future/target token with an
+        # action that has nothing to do with the frame it's predicting,
+        # which matches this session's finding that forward_train's loss was
+        # nearly insensitive to corrupting the action entirely. History
+        # positions (tau < T_h) keep their own block tau ("action about to
+        # be taken from here") as forward-looking context, matching what
+        # rollout()'s current history-action handling assumes.
         aux_parts = []
         if act_emb is not None:
-            aux_emb_t = act_emb + t_embs[:, None, :].unsqueeze(0)  # (B, T, 1, D)
+            act_emb_corrected = act_emb.clone()
+            if T > T_h:
+                act_emb_corrected[:, T_h:] = act_emb[:, T_h - 1 : T_h]
+            aux_emb_t = act_emb_corrected + t_embs[:, None, :].unsqueeze(0)  # (B, T, 1, D)
             aux_parts.append(aux_emb_t)
         if prop_emb is not None:
             prop_emb_t = prop_emb + t_embs[:, None, :].unsqueeze(0)  # (B, T, 1, D)
@@ -294,12 +309,26 @@ class CJEPAWorldModel(nn.Module):
     # Inference / MPC
     # ------------------------------------------------------------------
 
-    def _single_step_predict(self, slots_hist, act_emb_step, prop_emb_step=None):
+    def _single_step_predict(
+        self, slots_hist, act_emb_step, hist_act_emb=None, prop_emb_step=None
+    ):
         """Predict one future slot given history and next-step aux variables.
 
         Args:
             slots_hist:    (BS, T_h, N, D) — history slots (fully visible)
-            act_emb_step:  (BS, 1, D) — action embedding for the future step
+            act_emb_step:  (BS, 1, D) — action embedding for the future step.
+                           Also reused, unshifted, as the LAST history
+                           position's own forward action: block (T_h - 1) is
+                           by definition "the action from the last history
+                           frame to the new future frame" — exactly this same
+                           candidate action, not a separate quantity.
+            hist_act_emb:  (BS, T_h - 1, D) or None — real action embeddings
+                           for the EARLIER history positions (0..T_h-2),
+                           "the action about to be taken from here" (matches
+                           _build_masked_tokens' forward-looking convention
+                           for history). Falls back to zeros if not provided
+                           (e.g. no action history is being tracked by the
+                           caller).
             prop_emb_step: (BS, 1, D) or None
 
         Returns:
@@ -326,10 +355,17 @@ class CJEPAWorldModel(nn.Module):
         # Aux nodes: history aux visible, future aux provided
         aux_parts = []
         if act_emb_step is not None:
-            # act_emb for history steps: zeros (we don't have them during rollout)
-            hist_act = torch.zeros(BS, T_h, 1, D, device=slot_tokens.device, dtype=slot_tokens.dtype)
-            fut_act = act_emb_step.unsqueeze(1) + t_embs[T_h]  # (BS, 1, 1, D)
-            act_tokens = torch.cat([hist_act, fut_act], dim=1)  # (BS, T_total, 1, D)
+            n_early = T_h - 1
+            if hist_act_emb is not None and n_early > 0:
+                early_hist_act = hist_act_emb + t_embs[:n_early].unsqueeze(0)  # (BS, n_early, D)
+                early_hist_act = early_hist_act.unsqueeze(2)  # (BS, n_early, 1, D)
+            else:
+                early_hist_act = torch.zeros(
+                    BS, n_early, 1, D, device=slot_tokens.device, dtype=slot_tokens.dtype
+                )
+            last_hist_act = (act_emb_step + t_embs[T_h - 1]).unsqueeze(1)  # (BS, 1, 1, D)
+            fut_act = (act_emb_step + t_embs[T_h]).unsqueeze(1)  # (BS, 1, 1, D)
+            act_tokens = torch.cat([early_hist_act, last_hist_act, fut_act], dim=1)  # (BS, T_total, 1, D)
             aux_parts.append(act_tokens)
 
         if prop_emb_step is not None:
@@ -393,17 +429,36 @@ class CJEPAWorldModel(nn.Module):
         act_flat = rearrange(action_candidates, 'b s t d -> (b s) t d')
         act_emb_all = self.action_encoder(act_flat)  # (BS, T_plan, D)
 
+        # Real observed history-action embeddings, if provided (see
+        # CJEPAHistoryPolicy), for the early history positions (0..T_h-2).
+        # This slides forward in lockstep with slots_h below: after each
+        # rollout step, the window's "early" actions eventually become this
+        # same loop's own earlier candidate actions rather than the original
+        # real ones, exactly mirroring how slots_h mixes real and predicted
+        # slots as it slides.
+        act_hist = None
+        if 'hist_action' in info and self.history_len > 1:
+            hist_action = info['hist_action']  # (B, S, T_h-1, act_block_dim)
+            hist_action_flat = rearrange(hist_action, 'b s t d -> (b s) t d')
+            act_hist = self.action_encoder(
+                hist_action_flat.to(act_emb_all.dtype)
+            )  # (BS, T_h-1, D)
+
         predicted = []
         # Flatten B×S for rollout
         slots_h = rearrange(slots_hist, 'b s t n d -> (b s) t n d')
 
         for t in range(T_plan):
             act_step = act_emb_all[:, t, :]  # (BS, D)
-            pred = self._single_step_predict(slots_h, act_step.unsqueeze(1))  # (BS, N, D)
+            pred = self._single_step_predict(
+                slots_h, act_step.unsqueeze(1), hist_act_emb=act_hist
+            )  # (BS, N, D)
             predicted.append(pred)
 
             # Slide history window
             slots_h = torch.cat([slots_h[:, 1:], pred.unsqueeze(1)], dim=1)
+            if act_hist is not None and act_hist.shape[1] > 0:
+                act_hist = torch.cat([act_hist[:, 1:], act_step.unsqueeze(1)], dim=1)
 
         predicted_slots = torch.stack(predicted, dim=1)  # (BS, T_plan, N, D)
         info['predicted_slots'] = rearrange(

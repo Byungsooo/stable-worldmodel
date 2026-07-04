@@ -26,5 +26,16 @@ class RandomInit(nn.Module):
         self.log_std = nn.Parameter(torch.log(torch.ones(1, 1, dim) * initial_std))
 
     def forward(self, batch_size: int):
-        noise = torch.randn(batch_size, self.n_slots, self.dim, device=self.mean.device)
+        # Deterministic per-slot noise instead of a fresh torch.randn every
+        # call: at CJEPA inference time, rollout() encodes history and goal
+        # frames in separate _extract_slots() calls (unlike training, which
+        # encodes a whole clip in one call via a shared draw), so unseeded
+        # noise here made the same pixel content map to unrelated points in
+        # slot-space depending purely on which call encoded it, swamping any
+        # real signal in the downstream cost comparison.
+        generator = torch.Generator(device=self.mean.device).manual_seed(0)
+        base_noise = torch.randn(
+            self.n_slots, self.dim, device=self.mean.device, generator=generator
+        )
+        noise = base_noise.unsqueeze(0).expand(batch_size, -1, -1)
         return self.mean + noise * self.log_std.exp()
