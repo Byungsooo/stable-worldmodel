@@ -117,7 +117,7 @@ class VideoDataset(FolderDataset):
         # av is installed. The cached factory doesn't survive DataLoader
         # worker spawn, so it is re-resolved lazily in each worker.
         self._ensure_reader()
-        super().__init__(name=name, folder_keys=video_keys or ['video'], **kw)
+        super().__init__(name=name, folder_keys=video_keys, **kw)
 
     @classmethod
     def _ensure_reader(cls):

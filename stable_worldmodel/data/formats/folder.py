@@ -35,6 +35,7 @@ class FolderDataset(Dataset):
         num_steps: int = 1,
         transform: Callable[[dict], dict] | None = None,
         keys_to_load: list[str] | None = None,
+        keys_to_cache: list[str] | None = None,
         folder_keys: list[str] | None = None,
         cache_dir: str | Path | None = None,
         path: str | Path | None = None,
@@ -73,6 +74,13 @@ class FolderDataset(Dataset):
                 if npz.exists():
                     self._cache[key] = np.load(npz)['arr_0']
                     logging.info(f"Cached '{key}' from '{npz}'")
+
+        if keys_to_cache:
+            logging.warning(
+                'FolderDataset: keys_to_cache=%s is not required — all '
+                'non-folder columns are already cached from .npz at init.',
+                keys_to_cache,
+            )
 
         super().__init__(lengths, offsets, frameskip, num_steps, transform)
 
@@ -126,6 +134,10 @@ class FolderDataset(Dataset):
         return {
             c: self._cache[c][row_idx] for c in self._keys if c in self._cache
         }
+
+    def get_dim(self, col: str) -> int:
+        data = self.get_col_data(col)
+        return np.prod(data.shape[1:]).item() if data.ndim > 1 else 1
 
 
 class ImageDataset(FolderDataset):
