@@ -157,7 +157,7 @@ def get_scaler(method: str = 'zscore', **kwargs):
 
     Args:
         method: One of ``'zscore'``, ``'percentile'``, ``'none'``.
-        **kwargs: Forwarded to the scaler constructor.
+        **kwargs (Any): Forwarded to the scaler constructor.
 
     Raises:
         ValueError: If ``method`` is not registered.
