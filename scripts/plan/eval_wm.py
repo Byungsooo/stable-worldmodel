@@ -30,9 +30,8 @@ def img_transform(cfg, dtype=torch.float32):
 
 
 def get_episodes_length(dataset, episodes):
-    col_name = (
-        'episode_idx' if 'episode_idx' in dataset.column_names else 'ep_idx'
-    )
+    schema_names = getattr(dataset, '_schema_names', dataset.column_names)
+    col_name = 'episode_idx' if 'episode_idx' in schema_names else 'ep_idx'
 
     episode_idx = dataset.get_col_data(col_name)
     step_idx = dataset.get_col_data('step_idx')
@@ -72,9 +71,8 @@ def run(cfg: DictConfig):
 
     dataset = get_dataset(cfg, cfg.eval.dataset_name)
     stats_dataset = dataset  # get_dataset(cfg, cfg.dataset.stats)
-    col_name = (
-        'episode_idx' if 'episode_idx' in dataset.column_names else 'ep_idx'
-    )
+    schema_names = getattr(dataset, '_schema_names', dataset.column_names)
+    col_name = 'episode_idx' if 'episode_idx' in schema_names else 'ep_idx'
     ep_indices, _ = np.unique(
         stats_dataset.get_col_data(col_name), return_index=True
     )
@@ -114,8 +112,14 @@ def run(cfg: DictConfig):
             )
             model.predictor = torch.compile(model.predictor)
         config = swm.PlanConfig(**cfg.plan_config)
-        objective = hydra.utils.instantiate(cfg.objective)
-        cost = swm.planning.ShootingCostEvaluator(model, objective)
+        # Costable models (e.g. prejepa) expose get_cost natively and are used
+        # directly as the cost surface; others compose via ShootingCostEvaluator.
+        # See stable_worldmodel.protocols.Costable's docstring.
+        if hasattr(model, 'get_cost'):
+            cost = model
+        else:
+            objective = hydra.utils.instantiate(cfg.objective)
+            cost = swm.planning.ShootingCostEvaluator(model, objective)
         solver = hydra.utils.instantiate(cfg.solver, cost=cost)
         policy = swm.policy.WorldModelPolicy(
             solver=solver, config=config, process=process, transform=transform
@@ -139,9 +143,7 @@ def run(cfg: DictConfig):
         ep_id: max_start_idx[i] for i, ep_id in enumerate(ep_indices)
     }
     # Map each dataset row’s episode_idx to its max_start_idx
-    col_name = (
-        'episode_idx' if 'episode_idx' in dataset.column_names else 'ep_idx'
-    )
+    col_name = 'episode_idx' if 'episode_idx' in schema_names else 'ep_idx'
     max_start_per_row = np.array(
         [max_start_idx_dict[ep_id] for ep_id in dataset.get_col_data(col_name)]
     )
@@ -161,8 +163,8 @@ def run(cfg: DictConfig):
 
     print(random_episode_indices)
 
-    eval_episodes = dataset.get_row_data(random_episode_indices)[col_name]
-    eval_start_idx = dataset.get_row_data(random_episode_indices)['step_idx']
+    eval_episodes = dataset.get_col_data(col_name)[random_episode_indices]
+    eval_start_idx = dataset.get_col_data('step_idx')[random_episode_indices]
 
     if len(eval_episodes) < cfg.eval.num_eval:
         raise ValueError(
@@ -202,6 +204,11 @@ def run(cfg: DictConfig):
                     cfg.eval.get('callables'), resolve=True
                 ),
                 video=results_path,
+                options=OmegaConf.to_container(
+                    cfg.eval.get('options'), resolve=True
+                )
+                if cfg.eval.get('options')
+                else None,
             )
         print('Warmup done.')
 
@@ -217,6 +224,11 @@ def run(cfg: DictConfig):
                 cfg.eval.get('callables'), resolve=True
             ),
             video=results_path,
+            options=OmegaConf.to_container(
+                cfg.eval.get('options'), resolve=True
+            )
+            if cfg.eval.get('options')
+            else None,
         )
     end_time = time.time()
 

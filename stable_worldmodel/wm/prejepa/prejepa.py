@@ -47,6 +47,8 @@ class PreJEPA(torch.nn.Module):
         info[f'pixels_{target}'] = pixels_embed
 
         for key in emb_keys:
+            if f'{prefix}{key}' not in info:
+                continue
             extr_enc = self.extra_encoders[key]
             extra_input = info[f'{prefix}{key}'].float()  # (B, T, dim)
             extra_embed = extr_enc(

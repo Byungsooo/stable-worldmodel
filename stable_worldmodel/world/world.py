@@ -250,6 +250,7 @@ class World:
                 callables,
                 video,
                 mode,
+                options=options,
             )
         mode = reset_mode or 'auto'
         return self._evaluate(episodes, seed, options, video, mode)
@@ -500,6 +501,7 @@ class World:
         callables,
         video,
         mode,
+        options=None,
     ) -> dict:
         n = len(episodes_idx)
         assert n == self.num_envs
@@ -511,7 +513,7 @@ class World:
             goal_offset,
         )
 
-        self.reset(seed=init_state.get('seed'))
+        self.reset(seed=init_state.get('seed'), options=options)
 
         if callables:
             merged = {**init_state, **goal_state}
